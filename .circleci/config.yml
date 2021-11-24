@@ -16,7 +16,7 @@ jobs:
       - checkout
       - run:
           name: "install deps"
-          command: pip install -r requirements.txt --extra-index-url https://dash-playground.plotly.host/Docs/packages
+          command: pip install -r requirements.txt --extra-index-url https://dash-playground.plotly.host/docs/packages
 
 # Invoke jobs via workflows
 # See: https://circleci.com/docs/2.0/configuration-reference/#workflows
