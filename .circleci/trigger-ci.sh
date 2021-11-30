@@ -30,7 +30,7 @@ if [[ ${LAST_COMPLETED_BUILD_SHA} == "null" ]] || [[ $(git cat-file -t $LAST_COM
     uniq)
 
   REMOTE_BRANCHES=$(git branch -r | sed 's/\s*origin\///' | tr '\n' ' ')
-  PARENT_BRANCH=develop
+  PARENT_BRANCH=main
   for BRANCH in ${TREE[@]}; do
     BRANCH=${BRANCH#"origin/"}
     if [[ " ${REMOTE_BRANCHES[@]} " == *" ${BRANCH} "* ]]; then
@@ -50,8 +50,8 @@ if [[ ${LAST_COMPLETED_BUILD_SHA} == "null" ]] || [[ $(git cat-file -t $LAST_COM
 fi
 
 if [[ ${LAST_COMPLETED_BUILD_SHA} == "null" ]] || [[ $(git cat-file -t $LAST_COMPLETED_BUILD_SHA) != "commit" ]]; then
-  echo -e "\e[93mNo CI builds for branch ${PARENT_BRANCH}. Using develop.\e[0m"
-  LAST_COMPLETED_BUILD_SHA=$(git rev-parse origin/develop)
+  echo -e "\e[93mNo CI builds for branch ${PARENT_BRANCH}. Using main.\e[0m"
+  LAST_COMPLETED_BUILD_SHA=$(git rev-parse origin/main)
 fi
 
 ############################################
