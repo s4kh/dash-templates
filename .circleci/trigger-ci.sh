@@ -238,7 +238,7 @@ function main {
   total_templates=$( echo "${statuses}" | jq '. | length' )
 
   changed_temps=$( echo "${statuses}" | jq '. | map(select(.changes > 0)) | .[] .template' )
-  echo changed_temps
+  echo $changed_temps
 
   echo "Number of templates changed: ${changed_templates} / ${total_templates}"
 
