@@ -3,12 +3,12 @@ set -e
 
 # The root directory of packages.
 # Use `.` if your packages are located in root.
-ROOT="."
+ROOT="." 
 REPOSITORY_TYPE="github"
 CIRCLE_API="https://circleci.com/api"
 
 if [[ -z "${CIRCLE_TOKEN}" ]]; then
-  echo -e "\e[93mEnvironment variable CIRCLE_TOKEN is not set. Exiting.\e[0m"
+    echo -e "\e[93mEnvironment variable CIRCLE_TOKEN is not set. Exiting.\e[0m"
   exit 1
 fi
 
@@ -16,37 +16,39 @@ fi
 ## 1. Commit SHA of last CI build
 ############################################
 LAST_COMPLETED_BUILD_URL="${CIRCLE_API}/v1.1/project/${REPOSITORY_TYPE}/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/tree/${CIRCLE_BRANCH}?filter=completed&limit=100&shallow=true"
-curl -Ss -u ${CIRCLE_TOKEN}: ${LAST_COMPLETED_BUILD_URL} >circle.json
-LAST_COMPLETED_BUILD_SHA=$(cat circle.json | jq -r 'map(select(.status == "success") | select(.workflows.workflow_name != "ci")) | .[0]["vcs_revision"]')
+curl -Ss -u ${CIRCLE_TOKEN}: ${LAST_COMPLETED_BUILD_URL} > circle.json
+LAST_COMPLETED_BUILD_SHA=`cat circle.json | jq -r 'map(select(.status == "success") | select(.workflows.workflow_name != "ci")) | .[0]["vcs_revision"]'`
 
-if [[ ${LAST_COMPLETED_BUILD_SHA} == "null" ]] || [[ $(git cat-file -t $LAST_COMPLETED_BUILD_SHA) != "commit" ]]; then
+if  [[ ${LAST_COMPLETED_BUILD_SHA} == "null" ]] || [[ $(git cat-file -t $LAST_COMPLETED_BUILD_SHA) != "commit" ]]; then
+  echo -e "\e[93mThere are no completed CI builds in branch ${CIRCLE_BRANCH}.\e[0m"
 
   # Adapted from https://gist.github.com/joechrysler/6073741
-  TREE=$(git show-branch -a 2>/dev/null |
-    grep '\*' |
-    grep -v $(git rev-parse --abbrev-ref HEAD) |
-    sed 's/.*\[\(.*\)\].*/\1/' |
-    sed 's/[\^~].*//' |
-    uniq)
+  TREE=$(git show-branch -a 2>/dev/null \
+    | grep '\*' \
+    | grep -v `git rev-parse --abbrev-ref HEAD` \
+    | sed 's/.*\[\(.*\)\].*/\1/' \
+    | sed 's/[\^~].*//' \
+    | uniq)
 
   REMOTE_BRANCHES=$(git branch -r | sed 's/\s*origin\///' | tr '\n' ' ')
   PARENT_BRANCH=main
-  for BRANCH in ${TREE[@]}; do
+  for BRANCH in ${TREE[@]}
+  do
     BRANCH=${BRANCH#"origin/"}
     if [[ " ${REMOTE_BRANCHES[@]} " == *" ${BRANCH} "* ]]; then
-      echo "Found the parent branch: ${CIRCLE_BRANCH}..${BRANCH}"
-      PARENT_BRANCH=$BRANCH
-      break
+        echo "Found the parent branch: ${CIRCLE_BRANCH}..${BRANCH}"
+        PARENT_BRANCH=$BRANCH
+        break
     fi
   done
 
   echo "Searching for CI builds in branch '${PARENT_BRANCH}' ..."
 
   LAST_COMPLETED_BUILD_URL="${CIRCLE_API}/v1.1/project/${REPOSITORY_TYPE}/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/tree/${PARENT_BRANCH}?filter=completed&limit=100&shallow=true"
-  LAST_COMPLETED_BUILD_SHA=$(curl -Ss -u "${CIRCLE_TOKEN}:" "${LAST_COMPLETED_BUILD_URL}" |
-    jq -r "map(\
+  LAST_COMPLETED_BUILD_SHA=`curl -Ss -u "${CIRCLE_TOKEN}:" "${LAST_COMPLETED_BUILD_URL}" \
+    | jq -r "map(\
       select(.status == \"success\") | select(.workflows.workflow_name != \"ci\") | select(.build_num < ${CIRCLE_BUILD_NUM})) \
-    | .[0][\"vcs_revision\"]")
+    | .[0][\"vcs_revision\"]"`
 fi
 
 if [[ ${LAST_COMPLETED_BUILD_SHA} == "null" ]] || [[ $(git cat-file -t $LAST_COMPLETED_BUILD_SHA) != "commit" ]]; then
@@ -65,8 +67,8 @@ PARAMETERS='"trigger":false'
 COUNT=0
 
 # Get the list of workflows in current branch for which the CI is currently in failed state
-FAILED_WORKFLOWS=$(cat circle.json |
-  jq -r "map(select(.branch == \"${CIRCLE_BRANCH}\")) \
+FAILED_WORKFLOWS=$(cat circle.json \
+  | jq -r "map(select(.branch == \"${CIRCLE_BRANCH}\")) \
   | group_by(.workflows.workflow_name) \
   | .[] \
   | {workflow: .[0].workflows.workflow_name, status: .[0].status} \
@@ -74,22 +76,19 @@ FAILED_WORKFLOWS=$(cat circle.json |
   | .workflow")
 
 echo "Workflows currently in failed status: (${FAILED_WORKFLOWS[@]})."
-echo "packages: $PACKAGES"
 
-TEMPLATES=()
-
-for PACKAGE in ${PACKAGES[@]}; do
+for PACKAGE in ${PACKAGES[@]}
+do
   PACKAGE_PATH=${ROOT#.}/$PACKAGE
-  echo "git log -1 $LAST_COMPLETED_BUILD_SHA..$CIRCLE_SHA1 --format=format:%H --full-diff ${PACKAGE_PATH#/}"
   LATEST_COMMIT_SINCE_LAST_BUILD=$(git log -1 $LAST_COMPLETED_BUILD_SHA..$CIRCLE_SHA1 --format=format:%H --full-diff ${PACKAGE_PATH#/})
 
   if [[ -z "$LATEST_COMMIT_SINCE_LAST_BUILD" ]]; then
     INCLUDED=0
-    for FAILED_BUILD in ${FAILED_WORKFLOWS[@]}; do
+    for FAILED_BUILD in ${FAILED_WORKFLOWS[@]}
+    do
       if [[ "$PACKAGE" == "$FAILED_BUILD" ]]; then
         INCLUDED=1
-        PARAMETERS+=", \"template_name\":\"$PACKAGE\""
-        TEMPLATES+=("$PACKAGE")
+        PARAMETERS+=", \"$PACKAGE\":true"
         COUNT=$((COUNT + 1))
         echo -e "\e[36m  [+] ${PACKAGE} \e[21m (included because failed since last build)\e[0m"
         break
@@ -100,15 +99,11 @@ for PACKAGE in ${PACKAGES[@]}; do
       echo -e "\e[90m  [-] $PACKAGE \e[0m"
     fi
   else
-    PARAMETERS+=", \"template_name\":\"$PACKAGE\""
-    TEMPLATES+=("$PACKAGE")
+    PARAMETERS+=", \"$PACKAGE\":true"
     COUNT=$((COUNT + 1))
     echo -e "\e[36m  [+] ${PACKAGE} \e[21m (changed in [${LATEST_COMMIT_SINCE_LAST_BUILD:0:7}])\e[0m"
   fi
 done
-
-echo -e "xxx $TEMPLATES"
-echo -e "seee $PARAMETERS"
 
 if [[ $COUNT -eq 0 ]]; then
   echo -e "\e[93mNo changes detected in packages. Skip triggering workflows.\e[0m"
@@ -117,7 +112,13 @@ fi
 
 echo "Changes detected in ${COUNT} package(s)."
 
-URL="${CIRCLE_API}/v2/project/${REPOSITORY_TYPE}/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/pipeline"
+############################################
+## 3. CicleCI REST API call
+############################################
+DATA="{ \"branch\": \"$CIRCLE_BRANCH\", \"parameters\": { $PARAMETERS } }"
+echo "Triggering pipeline with data:"
+echo -e "  $DATA"
+
 
 # for TEMPLATE in "${TEMPLATES[@]}"; do
 #   DATA="{ \"branch\": \"$CIRCLE_BRANCH\", \"parameters\": { \"template_name\":\"$TEMPLATE\" } }"
