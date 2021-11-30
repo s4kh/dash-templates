@@ -80,6 +80,7 @@ TEMPLATES=()
 
 for PACKAGE in ${PACKAGES[@]}; do
   PACKAGE_PATH=${ROOT#.}/$PACKAGE
+  echo "git log -1 $LAST_COMPLETED_BUILD_SHA..$CIRCLE_SHA1 --format=format:%H --full-diff ${PACKAGE_PATH#/}"
   LATEST_COMMIT_SINCE_LAST_BUILD=$(git log -1 $LAST_COMPLETED_BUILD_SHA..$CIRCLE_SHA1 --format=format:%H --full-diff ${PACKAGE_PATH#/})
 
   if [[ -z "$LATEST_COMMIT_SINCE_LAST_BUILD" ]]; then
@@ -106,13 +107,13 @@ for PACKAGE in ${PACKAGES[@]}; do
   fi
 done
 
+echo -e "xxx $TEMPLATES"
+echo -e "seee $PARAMETERS"
+
 if [[ $COUNT -eq 0 ]]; then
   echo -e "\e[93mNo changes detected in packages. Skip triggering workflows.\e[0m"
   exit 0
 fi
-
-echo -e "xxx $TEMPLATES"
-echo -e "seee $PARAMETERS"
 
 echo "Changes detected in ${COUNT} package(s)."
 
