@@ -12,7 +12,7 @@ def wait_for_callbacks(dash_duo):
 
 def test_app(dash_duo):
     app = import_app("app")
-    dash_duo.start_server(app, port="8000")
+    dash_duo.start_server(app, port="30033")
     dash_duo.driver.maximize_window()
 
     dash_duo.wait_for_page(url="{}/{}".format(dash_duo.server_url, "/"), timeout=15)

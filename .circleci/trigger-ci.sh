@@ -23,12 +23,7 @@ if  [[ ${LAST_COMPLETED_BUILD_SHA} == "null" ]] || [[ $(git cat-file -t $LAST_CO
   echo -e "\e[93mThere are no completed CI builds in branch ${CIRCLE_BRANCH}.\e[0m"
 
   # Adapted from https://gist.github.com/joechrysler/6073741
-  TREE=$(git show-branch -a 2>/dev/null \
-    | grep '\*' \
-    | grep -v `git rev-parse --abbrev-ref HEAD` \
-    | sed 's/.*\[\(.*\)\].*/\1/' \
-    | sed 's/[\^~].*//' \
-    | uniq)
+  TREE=$(git show-branch -a 2>/dev/null | grep '\*' | grep -v "git rev-parse --abbrev-ref HEAD" | head -n1 | sed 's/.*\[\(.*\)\].*/\1/' | sed 's/[\^~].*//')
 
   REMOTE_BRANCHES=$(git branch -r | sed 's/\s*origin\///' | tr '\n' ' ')
   PARENT_BRANCH=main
