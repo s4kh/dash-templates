@@ -18,7 +18,7 @@ function read_config_packages {
   c=$(jq --raw-output '(.packages // {}) | length' "$1")
   if [[ "${c}" == "0" ]]; then
     root_dir=$(jq --raw-output '.root // "."' "$1")
-    find "${root_dir}/" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | awk -v d="${root_dir}" '{print $1 " " d "/" $1 "/"}'
+    find "${root_dir}/" -not -path '*/\.*' -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | awk -v d="${root_dir}" '{print $1 " " d "/" $1 "/"}'
   else
     jq -r '.packages | to_entries | map(([.key] + .value) | join(" ")) | join ("\n")' "$1"
   fi
