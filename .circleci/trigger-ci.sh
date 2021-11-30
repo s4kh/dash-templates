@@ -148,7 +148,7 @@ function create_request_body {
   echo "$1" | 
   jq --raw-output --arg branch "${CIRCLE_BRANCH}" --arg trigger "${TRIGGER_PARAM_NAME}" --argjson params "${CI_PARAMETERS:-null}" '. | 
     map(select(.changes > 0)) | 
-    reduce .[] as $i (($params // {}) * { ($trigger): false }; "template_name"=.[$i.template]) | 
+    reduce .[] as $i (($params // {}) * { ($trigger): false }; .\"template_name\"=[$i.template]) | 
     { branch: $branch, parameters: . } | 
     @json'
 }
@@ -236,6 +236,8 @@ function main {
   print_status "${statuses}"
   changed_templates=$( echo "${statuses}" | jq '. | map(select(.changes > 0)) | length' )
   total_templates=$( echo "${statuses}" | jq '. | length' )
+
+  echo "${statuses}"
 
   echo "Number of templates changed: ${changed_templates} / ${total_templates}"
 
