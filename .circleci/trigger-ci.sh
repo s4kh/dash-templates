@@ -153,6 +153,10 @@ function create_request_body {
     @json'
 }
 
+function create_request_params {
+  echo "{ \"branch\": \"${CIRCLE_BRANCH}\", \"parameters\": { \"${TRIGGER_PARAM_NAME}\": false, \"template_name\": ${1} } }"
+}
+
 function create_pipeline {
   url="https://circleci.com/api/v2/project/${PROJECT_SLUG}/pipeline"
   echo -e "Trigger:\n\tUrl: ${url}\n\tData: $1"
@@ -237,13 +241,15 @@ function main {
   changed_templates=$( echo "${statuses}" | jq '. | map(select(.changes > 0)) | length' )
   total_templates=$( echo "${statuses}" | jq '. | length' )
 
-  changed_temps=$( echo "${statuses}" | jq '. | map(select(.changes > 0)) | .[] .template' )
-  echo $changed_temps
+  readarray -t changed_temps < <( echo "${statuses}" | jq '. | map(select(.changes > 0)) | .[] .template' )
+  
 
   echo "Number of templates changed: ${changed_templates} / ${total_templates}"
 
   if [[ "${changed_templates}" != "0" ]]; then
-    create_pipeline "$( create_request_body "${statuses}" )"
+      for template in "${changed_temps[@]}"; do
+          create_pipeline "$( create_request_params "${template}" )"
+      done    
   else
     echo "No changes in templates. Skip workflow trigger."
   fi
