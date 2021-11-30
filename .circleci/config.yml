@@ -47,9 +47,15 @@ jobs:
       - run:
           name: Content 
           command: echo "<< parameters.template_name >> building."
+      - restore_cache:
+          key: deps1-{{ .Branch }}-{{ checksum "requirements.txt" }}
       - run:
           name: "install deps"
           command: pip install -r requirements.txt --extra-index-url https://dash-playground.plotly.host/Docs/packages
+      - save_cache:
+          key: deps1-{{ .Branch }}-{{ checksum "requirements.txt" }}
+          paths:
+            - "venv"
       - run:
           name: "run web cmd"
           command: gunicorn app:server --workers 4

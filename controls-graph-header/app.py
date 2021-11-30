@@ -70,7 +70,7 @@ app.layout = ddk.App([
 
     ddk.ControlCard(controls, width=30),
 
-    ddk.Card(width=70, children=ddk.Graph(figure=px.line(df, x="date", y=["GOOG", "AAPL"], title='Stock Pricess')))
+    ddk.Card(width=70, children=ddk.Graph(figure=px.line(df, x="date", y=["GOOG", "AAPL"], title='Stock Prices')))
 
 ])
 

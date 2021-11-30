@@ -74,6 +74,7 @@ FAILED_WORKFLOWS=$(cat circle.json |
   | .workflow")
 
 echo "Workflows currently in failed status: (${FAILED_WORKFLOWS[@]})."
+echo "packages: $PACKAGES"
 
 TEMPLATES=()
 
@@ -110,11 +111,12 @@ if [[ $COUNT -eq 0 ]]; then
   exit 0
 fi
 
+echo -e "xxx $TEMPLATES"
+echo -e "seee $PARAMETERS"
+
 echo "Changes detected in ${COUNT} package(s)."
 
 URL="${CIRCLE_API}/v2/project/${REPOSITORY_TYPE}/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/pipeline"
-echo -e " $TEMPLATES"
-echo "${#TEMPLATES[@]}"
 
 # for TEMPLATE in "${TEMPLATES[@]}"; do
 #   DATA="{ \"branch\": \"$CIRCLE_BRANCH\", \"parameters\": { \"template_name\":\"$TEMPLATE\" } }"
