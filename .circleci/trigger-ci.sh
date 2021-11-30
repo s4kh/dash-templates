@@ -148,7 +148,7 @@ function create_request_body {
   echo "$1" | 
   jq --raw-output --arg branch "${CIRCLE_BRANCH}" --arg trigger "${TRIGGER_PARAM_NAME}" --argjson params "${CI_PARAMETERS:-null}" '. | 
     map(select(.changes > 0)) | 
-    reduce .[] as $i (($params // {}) * { ($trigger): false }; .\"template_name\"=[$i.template]) | 
+    reduce .[] as $i (($params // {}) * { ($trigger): false}; ."template_name"=$i.template) |
     { branch: $branch, parameters: . } | 
     @json'
 }
