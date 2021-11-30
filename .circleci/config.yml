@@ -2,34 +2,51 @@
 # See: https://circleci.com/docs/2.0/configuration-reference
 version: 2.1
 
+parameters:
+  # This parameter is used to trigger the main workflow
+  trigger:
+    type: boolean
+    default: true
+  template_name:
+    type: string
+    default: ''
+
+executors:
+  node:
+    docker:
+      - image: circleci/node
+
 orbs: 
   python: circleci/python@1.5.0
 
 # Define a job to be invoked later in a workflow.
 # See: https://circleci.com/docs/2.0/configuration-reference/#jobs
 jobs:
+  trigger-workflows:
+    executor: node
+    steps:
+      - checkout
+      - run:
+          name: Trigger workflows
+          command: chmod +x .circleci/trigger-ci.sh && .circleci/trigger-ci.sh
+
   build:
+    parameters:
+      template_name:
+        type: string
     # Specify the execution environment. You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
     # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
     docker:
       - image: cimg/python:3.8.11
     # Add steps to the job
     # See: https://circleci.com/docs/2.0/configuration-reference/#steps
+    working_directory: ~/project/<< parameters.template_name >>
     steps:
-      - checkout
-      - restore_cache:
-          keys:
-            # when lock file changes, use increasingly general patterns to restore cache
-            - pip-packages-v1-{{ .Branch }}-{{ checksum "Pipfile.lock" }}
-            - pip-packages-v1-{{ .Branch }}-
-            - pip-packages-v1-
+      - checkout:
+          path: ~/project
       - run:
           name: "install deps"
           command: pip install -r requirements.txt --extra-index-url https://dash-playground.plotly.host/Docs/packages
-      - save_cache:
-          paths: 
-            - ~/.local/share/virtualenvs/venv  # this path depends on where pipenv creates a virtualenv
-          key: pip-packages-v1-{{ .Branch }}-{{ checksum "Pipfile.lock" }}
       - run:
           name: "run web cmd"
           command: gunicorn app:server --workers 4
@@ -40,7 +57,14 @@ jobs:
 # Invoke jobs via workflows
 # See: https://circleci.com/docs/2.0/configuration-reference/#workflows
 workflows:
-  build-deploy:
+  ci:
+    when: << pipeline.parameters.trigger >>
     jobs:
-      - build
+      - trigger-workflows
+      
+  build-deploy:
+    when: << pipeline.parameters.template_name >>
+    jobs:
+      - build:
+          template_name: << pipeline.parameters.template_name >>
 
