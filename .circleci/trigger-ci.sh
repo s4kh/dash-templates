@@ -119,7 +119,7 @@ function diff {
 }
 
 function print_status {
-  echo -e "\nTrigger\tExists\tChanges\tParent\t\tPackage\n$(printf '=%0.s' {1..60})"
+  echo -e "\nTrigger\tExists\tChanges\tParent\t\tTemplate\n$(printf '=%0.s' {1..60})"
   echo "$1" | jq --raw-output '
     def colors:
     {
@@ -140,7 +140,7 @@ function print_status {
       (if .branch == "built" then "[x]" else "[ ]" end) + "\t" + 
       (.changes | tostring) + "\t" + 
       .parent + "\t" +
-      .package + colors.reset
+      .template + colors.reset
     '
 }
 
@@ -148,7 +148,7 @@ function create_request_body {
   echo "$1" | 
   jq --raw-output --arg branch "${CIRCLE_BRANCH}" --arg trigger "${TRIGGER_PARAM_NAME}" --argjson params "${CI_PARAMETERS:-null}" '. | 
     map(select(.changes > 0)) | 
-    reduce .[] as $i (($params // {}) * { ($trigger): false }; .[$i.package] = true) | 
+    reduce .[] as $i (($params // {}) * { ($trigger): false }; "template_name"=.[$i.template]) | 
     { branch: $branch, parameters: . } | 
     @json'
 }
@@ -231,18 +231,18 @@ function main {
     read_config_packages "${CONFIG_FILE}" | 
     diff "${git_parent_commit}" "${BUILDS_FILE}" |
     jq --raw-input --slurp \
-      'split("\n") | map(select(. != "")) | map(split(" ")) | map({ package: .[3], parent: .[1], branch: .[2], changes: .[0] | tonumber })')
+      'split("\n") | map(select(. != "")) | map(split(" ")) | map({ template: .[3], parent: .[1], branch: .[2], changes: .[0] | tonumber })')
 
   print_status "${statuses}"
-  changed_packages=$( echo "${statuses}" | jq '. | map(select(.changes > 0)) | length' )
-  total_packages=$( echo "${statuses}" | jq '. | length' )
+  changed_templates=$( echo "${statuses}" | jq '. | map(select(.changes > 0)) | length' )
+  total_templates=$( echo "${statuses}" | jq '. | length' )
 
-  echo "Number of packages changed: ${changed_packages} / ${total_packages}"
+  echo "Number of templates changed: ${changed_templates} / ${total_templates}"
 
-  if [[ "${changed_packages}" != "0" ]]; then
+  if [[ "${changed_templates}" != "0" ]]; then
     create_pipeline "$( create_request_body "${statuses}" )"
   else
-    echo "No changes in packages. Skip workflow trigger."
+    echo "No changes in templates. Skip workflow trigger."
   fi
 
   if [[ "${MONOREPO_DEBUG}" == "true" ]]; then
