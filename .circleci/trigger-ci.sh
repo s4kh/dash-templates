@@ -75,6 +75,8 @@ FAILED_WORKFLOWS=$(cat circle.json |
 
 echo "Workflows currently in failed status: (${FAILED_WORKFLOWS[@]})."
 
+TEMPLATES=()
+
 for PACKAGE in ${PACKAGES[@]}; do
   PACKAGE_PATH=${ROOT#.}/$PACKAGE
   LATEST_COMMIT_SINCE_LAST_BUILD=$(git log -1 $LAST_COMPLETED_BUILD_SHA..$CIRCLE_SHA1 --format=format:%H --full-diff ${PACKAGE_PATH#/})
@@ -85,6 +87,7 @@ for PACKAGE in ${PACKAGES[@]}; do
       if [[ "$PACKAGE" == "$FAILED_BUILD" ]]; then
         INCLUDED=1
         PARAMETERS+=", \"template_name\":\"$PACKAGE\""
+        TEMPLATES+=("$PACKAGE")
         COUNT=$((COUNT + 1))
         echo -e "\e[36m  [+] ${PACKAGE} \e[21m (included because failed since last build)\e[0m"
         break
@@ -96,6 +99,7 @@ for PACKAGE in ${PACKAGES[@]}; do
     fi
   else
     PARAMETERS+=", \"template_name\":\"$PACKAGE\""
+    TEMPLATES+=("$PACKAGE")
     COUNT=$((COUNT + 1))
     echo -e "\e[36m  [+] ${PACKAGE} \e[21m (changed in [${LATEST_COMMIT_SINCE_LAST_BUILD:0:7}])\e[0m"
   fi
@@ -108,20 +112,24 @@ fi
 
 echo "Changes detected in ${COUNT} package(s)."
 
-DATA="{ \"branch\": \"$CIRCLE_BRANCH\", \"parameters\": { $PARAMETERS } }"
-echo "Triggering pipeline with data:"
-echo -e "  $DATA"
-
 URL="${CIRCLE_API}/v2/project/${REPOSITORY_TYPE}/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/pipeline"
-HTTP_RESPONSE=$(curl -s -u "${CIRCLE_TOKEN}:" -o response.txt -w "%{http_code}" -X POST --header "Content-Type: application/json" -d "$DATA" "$URL")
+echo -e " $TEMPLATES"
+echo "${#TEMPLATES[@]}"
 
-if [ "$HTTP_RESPONSE" -ge "200" ] && [ "$HTTP_RESPONSE" -lt "300" ]; then
-    echo "API call succeeded."
-    echo "Response:"
-    cat response.txt
-else
-    echo -e "\e[93mReceived status code: ${HTTP_RESPONSE}\e[0m"
-    echo "Response:"
-    cat response.txt
-    exit 1
-fi
+# for TEMPLATE in "${TEMPLATES[@]}"; do
+#   DATA="{ \"branch\": \"$CIRCLE_BRANCH\", \"parameters\": { \"template_name\":\"$TEMPLATE\" } }"
+#   echo "Triggering pipeline with data:"
+#   echo -e "  $DATA"  
+#   HTTP_RESPONSE=$(curl -s -u "${CIRCLE_TOKEN}:" -o response.txt -w "%{http_code}" -X POST --header "Content-Type: application/json" -d "$DATA" "$URL")
+
+#   if [ "$HTTP_RESPONSE" -ge "200" ] && [ "$HTTP_RESPONSE" -lt "300" ]; then
+#       echo "API call succeeded."
+#       echo "Response:"
+#       cat response.txt
+#   else
+#       echo -e "\e[93mReceived status code: ${HTTP_RESPONSE}\e[0m"
+#       echo "Response:"
+#       cat response.txt
+#       exit 1
+#   fi
+# done
