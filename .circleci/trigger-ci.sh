@@ -1,139 +1,253 @@
-#!/bin/bash
 set -e
 
-# The root directory of packages.
-# Use `.` if your packages are located in root.
-ROOT="." 
-REPOSITORY_TYPE="github"
-CIRCLE_API="https://circleci.com/api"
+readonly REPO_TYPE=$( echo "${CIRCLE_REPOSITORY_URL}" | awk '{ match($0,/@github/) ? r="github" : r="bitbucket"; print r }' )
+readonly PROJECT_SLUG="${REPO_TYPE}/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}"
 
-if [[ -z "${CIRCLE_TOKEN}" ]]; then
-    echo -e "\e[93mEnvironment variable CIRCLE_TOKEN is not set. Exiting.\e[0m"
-  exit 1
-fi
+readonly SCRIPT_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+readonly TMP_DIR=${SCRIPT_DIR}/temp
+readonly CONFIG_FILE=${SCRIPT_DIR}/monorepo.json
+readonly CONCURRENCY=8
 
-############################################
-## 1. Commit SHA of last CI build
-############################################
-LAST_COMPLETED_BUILD_URL="${CIRCLE_API}/v1.1/project/${REPOSITORY_TYPE}/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/tree/${CIRCLE_BRANCH}?filter=completed&limit=100&shallow=true"
-curl -Ss -u ${CIRCLE_TOKEN}: ${LAST_COMPLETED_BUILD_URL} > circle.json
-LAST_COMPLETED_BUILD_SHA=`cat circle.json | jq -r 'map(select(.status == "success") | select(.workflows.workflow_name != "ci")) | .[0]["vcs_revision"]'`
+readonly TRIGGER_PARAM_NAME="trigger"
 
-if  [[ ${LAST_COMPLETED_BUILD_SHA} == "null" ]] || [[ $(git cat-file -t $LAST_COMPLETED_BUILD_SHA) != "commit" ]]; then
-  echo -e "\e[93mThere are no completed CI builds in branch ${CIRCLE_BRANCH}.\e[0m"
+readonly BUILDS_FILE=${TMP_DIR}/builds.json
+readonly DATA_FILE=${TMP_DIR}/data.json
 
-  # Adapted from https://gist.github.com/joechrysler/6073741
-  TREE=$(git show-branch -a 2>/dev/null | grep '\*' | grep -v "git rev-parse --abbrev-ref HEAD" | head -n1 | sed 's/.*\[\(.*\)\].*/\1/' | sed 's/[\^~].*//')
+# Get the list of configured packages or default ones.
+function read_config_packages {
+  c=$(jq --raw-output '(.packages // {}) | length' "$1")
+  if [[ "${c}" == "0" ]]; then
+    root_dir=$(jq --raw-output '.root // "."' "$1")
+    find "${root_dir}/" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | awk -v d="${root_dir}" '{print $1 " " d "/" $1 "/"}'
+  else
+    jq -r '.packages | to_entries | map(([.key] + .value) | join(" ")) | join ("\n")' "$1"
+  fi
+}
 
-  REMOTE_BRANCHES=$(git branch -r | sed 's/\s*origin\///' | tr '\n' ' ')
-  PARENT_BRANCH=main
-  for BRANCH in ${TREE[@]}
-  do
-    BRANCH=${BRANCH#"origin/"}
-    if [[ " ${REMOTE_BRANCHES[@]} " == *" ${BRANCH} "* ]]; then
-        echo "Found the parent branch: ${CIRCLE_BRANCH}..${BRANCH}"
-        PARENT_BRANCH=$BRANCH
-        break
+# Download workflows status from CircleCI API (as JSON files).
+function get_workflows {
+  seq 0 100 $((($1 - 1) * 100)) | \
+  awk \
+    -v api="https://circleci.com/api/v1.1/project/${PROJECT_SLUG}" \
+    -v tree="/tree/${CIRCLE_BRANCH}" \
+    -v token="${CIRCLE_USER_TOKEN}" \
+    -v dir="${TMP_DIR}/data." \
+    '{ print $1 " " token " " api tree "?shallow=true&limit=100&offset=" $1 " " dir sprintf("%04d", $1) ".json" }' |\
+  xargs -n4 -P${CONCURRENCY} bash -c 'curl -u "$1:" -L -Ss -o $3 -w "\tGET: [%{response_code}] %{url_effective}\n" $2'
+}
+
+# Creates a map of workflows and commit SHAs for which build passed.
+function map {
+  # Group by (workflow, commit sha, job name) and select
+  # those workflows for which each job group contains at least one passed job.
+  jq '.? | 
+    group_by(.workflows.workflow_name) |
+      map({ 
+        (.[0].workflows.workflow_name):
+          group_by(.vcs_revision) |
+            map({
+              commit: .[0].vcs_revision,
+              queued_at: .[0].queued_at,
+              jobs: group_by(.workflows.job_name) | map({ success: any(.status == "success") })
+            }) |
+            map(select(.jobs | all(.success))) |
+            sort_by(.queued_at) |
+            reverse | 
+            map(.commit)
+      }) |
+      add |
+      select (. != null)'
+}
+
+# Get the nearest commit from which the current branch was created.
+function get_parent_commit {
+  git_file="${TMP_DIR}/branches.txt"
+  commit_sha=$1
+
+  if [[ ! -f "${git_file}" ]]; then
+    git show-branch --topo-order --sha1-name --current --remote > "${git_file}"
+  fi
+
+  remote_name=$(git remote show | head -n1)
+  indents=$(\
+    sed 's/].*/]/' "${git_file}" |                                                            # remove commit message
+    awk '/^\-/ {exit} {print}' |                                                              # get lines until commits are listed
+    awk -F '' -v b="[${remote_name}/${CIRCLE_BRANCH}]" 'match($0,/^ *\*/) || index($0, b)' |  # get only current branch and remote
+    awk -F '' '{ t = length($0); sub("^ *",""); print t - length($0) + 1 }')                  # calculate indentation level
+
+  head_indent=$(\
+    sed 's/].*/]/' "${git_file}" |                                                            # remove commit message
+    awk '/^\-/ {exit} {print}' |                                                              # get lines until commits are listed
+    awk -F '' -v b="[${remote_name}/HEAD]" 'index($0, b)' |                                   # get origin/HEAD line
+    awk -F '' '{ t = length($0); sub("^ *",""); print t - length($0) + 1 }')                  # calculate indentation level
+
+  i1=$(echo "${indents}" | head -n1)
+  i2=$(echo "${indents}" | tail -n1)
+  i3=${head_indent:-$i1}
+
+  sed 's/].*//' "${git_file}" |                                                                        # remove commit message
+    awk -F '[' -v c="${commit_sha}" \
+      'c == "null" || f; c!="null" && length($2) > 0 && index(c, $2) == 1 { f = 1; print }' |          # skip until first commit in current branch
+    awk -F ''  -v i="${i1}" 'match(substr($0, i, 1), /[\+\-\*]/)' |                                    # filter only commits (including merges) related to current branch
+    awk -F ''  -v i="${i1}" '{ print substr($0, 1, i - 1) " " substr($0, i + 1) }' |                   # excludes current branch
+    awk -F ''  -v i="${i2}" '{ print substr($0, 1, i - 1) " " substr($0, i + 1) }' |                   # excludes current remote branch
+    awk -F ''  -v i="${i3}" '{ print substr($0, 1, i - 1) " " substr($0, i + 1) }' |                   # excludes origin/HEAD branch
+    awk -F ''  'gsub(/ /, "", $0)' |                                                                   # remove white-space
+    awk -F ''  '/[\+\-]+\[/' |                                                                         # match only lines with commit or merge
+    head -n1 |                                                                                         # get the top most found commit
+    sed 's/^.*\[//'                                                                                    # leave only the commit sha text
+}
+
+# GIT diff each package to calculate the number of changed files. 
+function diff {
+  parent_sha=$1
+  builds_file=$2
+
+  while read -r package paths; do
+    last_build_sha=$(jq --raw-output --arg p "${package}" '.[$p][0]' "${builds_file}")
+    if [[ "${last_build_sha}" != "null" && "x${last_build_sha}" != "x" ]]; then
+      # diff changes since most recent successfull build for current workflow
+      echo "$(git diff "${last_build_sha}"..HEAD --name-only -- ${paths} | wc -l)" "${last_build_sha:0:9}" built "${package}"
+    elif [[ "x${parent_sha}" != "x" ]]; then
+      # diff changes since parent branch commit sha 
+      echo "$(git diff "${parent_sha}"..HEAD --name-only -- ${paths} | wc -l)" "${parent_sha:0:9}" new "${package}"
+    else
+      # no builds and missing parent branch (detached?)
+      echo 99999 - new "${package}"
     fi
   done
+}
 
-  echo "Searching for CI builds in branch '${PARENT_BRANCH}' ..."
+function print_status {
+  echo -e "\nTrigger\tExists\tChanges\tParent\t\tPackage\n$(printf '=%0.s' {1..60})"
+  echo "$1" | jq --raw-output '
+    def colors:
+    {
+      "red": "\u001b[31m",
+      "green": "\u001b[32m",
+      "yellow": "\u001b[33m",
+      "default": "\u001b[39m",
+      "reset": "\u001b[0m",
+    };
+    def choose_color(a):
+      if .changes == 99999 then colors.red 
+      elif .changes > 0 then colors.yellow 
+      elif .branch == "built" then colors.green
+      else colors.default
+    end;
+    .[] | choose_color(.) + 
+      (if .changes > 0 then "[x]" else "[ ]" end) + "\t" + 
+      (if .branch == "built" then "[x]" else "[ ]" end) + "\t" + 
+      (.changes | tostring) + "\t" + 
+      .parent + "\t" +
+      .package + colors.reset
+    '
+}
 
-  LAST_COMPLETED_BUILD_URL="${CIRCLE_API}/v1.1/project/${REPOSITORY_TYPE}/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/tree/${PARENT_BRANCH}?filter=completed&limit=100&shallow=true"
-  echo "curl -Ss -u \"${CIRCLE_TOKEN}:\" \"${LAST_COMPLETED_BUILD_URL}\" \
-    | jq -r \"map(\
-      select(.status == \"success\") | select(.workflows.workflow_name != \"ci\") | select(.build_num < ${CIRCLE_BUILD_NUM})) \
-    | .[0][\"vcs_revision\"]\""
-  LAST_COMPLETED_BUILD_SHA=`curl -Ss -u "${CIRCLE_TOKEN}:" "${LAST_COMPLETED_BUILD_URL}" \
-    | jq -r "map(\
-      select(.status == \"success\") | select(.build_num < ${CIRCLE_BUILD_NUM})) \
-    | .[0][\"vcs_revision\"]"`  
-fi
-##select(.workflows.workflow_name != \"ci\") |
-if [[ ${LAST_COMPLETED_BUILD_SHA} == "null" ]] || [[ $(git cat-file -t $LAST_COMPLETED_BUILD_SHA) != "commit" ]]; then
-  echo -e "\e[93mNo CI builds for branch ${PARENT_BRANCH}. Using main.\e[0m"
-  LAST_COMPLETED_BUILD_SHA=$(git rev-parse origin/main)
-fi
+function create_request_body {
+  echo "$1" | 
+  jq --raw-output --arg branch "${CIRCLE_BRANCH}" --arg trigger "${TRIGGER_PARAM_NAME}" --argjson params "${CI_PARAMETERS:-null}" '. | 
+    map(select(.changes > 0)) | 
+    reduce .[] as $i (($params // {}) * { ($trigger): false }; .[$i.package] = true) | 
+    { branch: $branch, parameters: . } | 
+    @json'
+}
 
-############################################
-## 2. Changed packages
-############################################
-PACKAGES=$(ls ${ROOT} -l | grep ^d | awk '{print $9}')
-echo "Searching for changes since commit [${LAST_COMPLETED_BUILD_SHA:0:7}] ..."
+function create_pipeline {
+  url="https://circleci.com/api/v2/project/${PROJECT_SLUG}/pipeline"
+  echo -e "Trigger:\n\tUrl: ${url}\n\tData: $1"
 
-## The CircleCI API parameters object
-PARAMETERS='"trigger":false'
-COUNT=0
+  if [[ "${CI}" != "true" ]]; then
+    echo "Not a CI environment. Skip pipeline trigger."
+    exit 0
+  fi;
 
-# Get the list of workflows in current branch for which the CI is currently in failed state
-FAILED_WORKFLOWS=$(cat circle.json \
-  | jq -r "map(select(.branch == \"${CIRCLE_BRANCH}\")) \
-  | group_by(.workflows.workflow_name) \
-  | .[] \
-  | {workflow: .[0].workflows.workflow_name, status: .[0].status} \
-  | select(.status == \"failed\") \
-  | .workflow")
+  status_code=$(curl -s -u "${CIRCLE_USER_TOKEN}:" -o response.json -w "%{http_code}" -X POST --header "Content-Type: application/json" -d "$1" "${url}")
 
-echo "Workflows currently in failed status: (${FAILED_WORKFLOWS[@]})."
-
-for PACKAGE in ${PACKAGES[@]}
-do
-  PACKAGE_PATH=${ROOT#.}/$PACKAGE
-  LATEST_COMMIT_SINCE_LAST_BUILD=$(git log -1 $LAST_COMPLETED_BUILD_SHA..$CIRCLE_SHA1 --format=format:%H --full-diff ${PACKAGE_PATH#/})
-  echo "git log -1 $LAST_COMPLETED_BUILD_SHA..$CIRCLE_SHA1 --format=format:%H --full-diff ${PACKAGE_PATH#/}"
-
-  if [[ -z "$LATEST_COMMIT_SINCE_LAST_BUILD" ]]; then
-    INCLUDED=0
-    for FAILED_BUILD in ${FAILED_WORKFLOWS[@]}
-    do
-      if [[ "$PACKAGE" == "$FAILED_BUILD" ]]; then
-        INCLUDED=1
-        PARAMETERS+=", \"$PACKAGE\":true"
-        COUNT=$((COUNT + 1))
-        echo -e "\e[36m  [+] ${PACKAGE} \e[21m (included because failed since last build)\e[0m"
-        break
-      fi
-    done
-
-    if [[ "$INCLUDED" == "0" ]]; then
-      echo -e "\e[90m  [-] $PACKAGE \e[0m"
-    fi
+  if [ "${status_code}" -ge "200" ] && [ "${status_code}" -lt "300" ]; then
+      echo "API call succeeded [${status_code}]. Response: "
+      cat response.json
   else
-    PARAMETERS+=", \"$PACKAGE\":true"
-    COUNT=$((COUNT + 1))
-    echo -e "\e[36m  [+] ${PACKAGE} \e[21m (changed in [${LATEST_COMMIT_SINCE_LAST_BUILD:0:7}])\e[0m"
+      echo "API call failed [${status_code}]. Response: "
+      cat response.json
+      exit 1
   fi
-done
+}
 
-if [[ $COUNT -eq 0 ]]; then
-  echo -e "\e[93mNo changes detected in packages. Skip triggering workflows.\e[0m"
-  exit 0
-fi
+function init {
+  if [[ "x${CIRCLE_USER_TOKEN}" == "x" ]]; then
+    echo "ENV variable CIRCLE_USER_TOKEN is empty. Please provide a user token."
+    exit 1
+  fi
 
-echo "Changes detected in ${COUNT} package(s)."
+  mkdir -p "${TMP_DIR}"
+  if [[ ! -f ${CONFIG_FILE} ]]; then
+    echo "No config file found at ${CONFIG_FILE}. Using defaults."
+    echo "{}" > "${CONFIG_FILE}"
+  fi
+}
 
-############################################
-## 3. CicleCI REST API call
-############################################
-DATA="{ \"branch\": \"$CIRCLE_BRANCH\", \"parameters\": { $PARAMETERS } }"
-echo "Triggering pipeline with data:"
-echo -e "  $DATA"
+function get_builds {
+  echo "Getting workflow status:"
+  get_workflows "$(jq '.pages // 1' "${CONFIG_FILE}")"
+  wait
 
+  cat "${TMP_DIR}"/data.*.json | jq --slurp 'reduce inputs as $i (.; . += $i) | flatten' > "${DATA_FILE}"
+  map < "${DATA_FILE}" > "${BUILDS_FILE}"
+  echo "Created build-commit map ${BUILDS_FILE}"
+}
 
-# for TEMPLATE in "${TEMPLATES[@]}"; do
-#   DATA="{ \"branch\": \"$CIRCLE_BRANCH\", \"parameters\": { \"template_name\":\"$TEMPLATE\" } }"
-#   echo "Triggering pipeline with data:"
-#   echo -e "  $DATA"  
-#   HTTP_RESPONSE=$(curl -s -u "${CIRCLE_TOKEN}:" -o response.txt -w "%{http_code}" -X POST --header "Content-Type: application/json" -d "$DATA" "$URL")
+function debug {
+  echo -e "\n\nDEBUG INFORMATION"
+  echo -e "\n\n=== Branches ==="
+  cat "${TMP_DIR}/branches.txt"
 
-#   if [ "$HTTP_RESPONSE" -ge "200" ] && [ "$HTTP_RESPONSE" -lt "300" ]; then
-#       echo "API call succeeded."
-#       echo "Response:"
-#       cat response.txt
-#   else
-#       echo -e "\e[93mReceived status code: ${HTTP_RESPONSE}\e[0m"
-#       echo "Response:"
-#       cat response.txt
-#       exit 1
-#   fi
-# done
+  echo -e "\n\n=== Builds ==="
+  cat "${BUILDS_FILE}"
+}
+
+function get_parent {
+  first_commit_in_branch=$(jq --raw-output 'map(select(.vcs_revision)) | last | .vcs_revision' "${DATA_FILE}")
+  echo "First built commit in branch: ${first_commit_in_branch}" >&2
+
+  parent_commit=$(get_parent_commit "${first_commit_in_branch}")
+  if [[ "x${parent_commit}" == "x" ]]; then
+    # This could happen when branch is force pushed
+    # and the build commit is no longer part of the history
+    echo -e "\tCould not find parent commit relative to first build commit." >&2
+    echo -e "\tEither branch was force pushed or build commit too old." >&2
+    parent_commit=$(get_parent_commit null)
+  fi
+  echo "Parent commit: ${parent_commit}" >&2
+  echo ${parent_commit}
+}
+
+function main {
+  init
+  get_builds
+  git_parent_commit=$( get_parent )
+
+  statuses=$(\
+    read_config_packages "${CONFIG_FILE}" | 
+    diff "${git_parent_commit}" "${BUILDS_FILE}" |
+    jq --raw-input --slurp \
+      'split("\n") | map(select(. != "")) | map(split(" ")) | map({ package: .[3], parent: .[1], branch: .[2], changes: .[0] | tonumber })')
+
+  print_status "${statuses}"
+  changed_packages=$( echo "${statuses}" | jq '. | map(select(.changes > 0)) | length' )
+  total_packages=$( echo "${statuses}" | jq '. | length' )
+
+  echo "Number of packages changed: ${changed_packages} / ${total_packages}"
+
+  if [[ "${changed_packages}" != "0" ]]; then
+    create_pipeline "$( create_request_body "${statuses}" )"
+  else
+    echo "No changes in packages. Skip workflow trigger."
+  fi
+
+  if [[ "${MONOREPO_DEBUG}" == "true" ]]; then
+    debug
+  fi
+}
+
+main "${@}"
