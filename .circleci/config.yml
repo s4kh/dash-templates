@@ -80,10 +80,12 @@ jobs:
       - checkout
       - run:
           name: "test"
-          command: |            
-            pip install "dash[testing]" pytest
+          command: |
+            mkdir -p /tmp/percy_export
+            rm -f /tmp/dash_artifacts/*
             virtualenv venv
             . venv/bin/activate
+            pip install "dash[testing]" pytest
             PERCY_ENABLE=0 PYTHONPATH=$(pwd) python -m pytest --headless -s screenshot_test.py
             deactivate
             mv /tmp/dash_artifacts/app*.png "/tmp/percy_export/<< parameters.template_name >>.png"      
