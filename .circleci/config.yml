@@ -44,7 +44,7 @@ jobs:
     working_directory: ~/project/<< parameters.template_name >>
     steps:
       - checkout:
-          path: ~/project
+          path: ~/project      
       - run:
           name: Content 
           command: echo "<< parameters.template_name >> building."
@@ -79,15 +79,17 @@ jobs:
                 install-geckodriver: false # otherwise true by default
       - checkout
       - run:
+          name: Content 
+          command: echo "<< parameters.template_name >> testing."
+      - run:
           name: "test"
           command: |
             mkdir -p /tmp/percy_export
             rm -f /tmp/dash_artifacts/*
-            virtualenv venv
-            . venv/bin/activate
-            pip install "dash[testing]" pytest
+            cd << parameters.template_name >>
+            ls -l
+            pip install -r requirements.txt --extra-index-url https://dash-playground.plotly.host/Docs/packages "dash[testing]" pytest
             PERCY_ENABLE=0 PYTHONPATH=$(pwd) python -m pytest --headless -s screenshot_test.py
-            deactivate
             mv /tmp/dash_artifacts/app*.png "/tmp/percy_export/<< parameters.template_name >>.png"      
 # Invoke jobs via workflows
 # See: https://circleci.com/docs/2.0/configuration-reference/#workflows
