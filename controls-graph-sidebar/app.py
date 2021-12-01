@@ -73,7 +73,7 @@ app.layout = ddk.App([
     ddk.SidebarCompanion([
         ddk.ControlCard(controls, orientation='horizontal'),
 
-        ddk.Card(width=100, children=ddk.Graph(figure=px.line(df, x="date", y=["GOOG", "AAPL"], title='Stossck Prices')))
+        ddk.Card(width=100, children=ddk.Graph(figure=px.line(df, x="date", y=["GOOG", "AAPL"], title='Stock Prices')))
     ])
 
 ])
