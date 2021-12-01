@@ -17,7 +17,8 @@ executors:
       - image: circleci/node
 
 orbs: 
-  python: circleci/python@1.5.0
+  browser-tools: circleci/browser-tools@1.2.2
+
 
 # Define a job to be invoked later in a workflow.
 # See: https://circleci.com/docs/2.0/configuration-reference/#jobs
@@ -60,9 +61,33 @@ jobs:
           name: "run web cmd"
           command: gunicorn app:server --workers 4
           background: true
+  test:
+    parameters:
+      template_name:
+        type: string
+    # Specify the execution environment. You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
+    # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
+    docker:
+      - image: cimg/python:3.8.11-browsers
+    # Add steps to the job
+    # See: https://circleci.com/docs/2.0/configuration-reference/#steps
+    working_directory: ~/project/<< parameters.template_name >>
+    steps:
+      - browser-tools/install-browser-tools:
+                chrome-version: 94.0.4606.54
+                install-firefox: false # otherwise true by default
+                install-geckodriver: false # otherwise true by default
+      - checkout:
+          path: ~/project
       - run:
           name: "test"
-          command: pytest
+          command: |            
+            pip install "dash[testing]" pytest
+            virtualenv venv
+            . venv/bin/activate
+            PERCY_ENABLE=0 PYTHONPATH=$(pwd) python -m pytest --headless -s screenshot_test.py
+            deactivate
+            mv /tmp/dash_artifacts/app*.png "/tmp/percy_export/<< parameters.template_name >>.png"      
 # Invoke jobs via workflows
 # See: https://circleci.com/docs/2.0/configuration-reference/#workflows
 workflows:
@@ -76,4 +101,9 @@ workflows:
     jobs:
       - build:
           template_name: << pipeline.parameters.template_name >>
+      - test:
+          template_name: << pipeline.parameters.template_name >>
+          requires:
+            - build
+
 
